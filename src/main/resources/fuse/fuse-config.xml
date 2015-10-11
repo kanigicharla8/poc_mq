@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:camel="http://camel.apache.org/schema/spring"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+         http://www.springframework.org/schema/context http://www.springframework.org/schema/context/spring-context.xsd
+         http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd"
+        >
+
+    <!-- event consumers -->
+    <bean id="aeiEventCepConsumer" class="com.bnsf.drools.poc.cep.consumer.jms.AEIEventCepConsumer">
+        <property name="sessionManager" ref="sessionManager"/>
+    </bean>
+
+    <bean id="gpsEventCepConsumer" class="com.bnsf.drools.poc.cep.consumer.jms.GPSEventCepConsumer">
+        <property name="sessionManager" ref="sessionManager"/>
+    </bean>
+
+    <!-- event transformers -->
+    <bean id="aeiTransformation" class="com.bnsf.drools.poc.tranformer.AEITransformation"/>
+    <bean id="gpsTransformation" class="com.bnsf.drools.poc.tranformer.GPSTransformation"/>
+
+
+    <camelContext xmlns="http://camel.apache.org/schema/spring">
+        <!-- GPS Event route -->
+
+        <route>
+            <from uri="activemq:queue:queue.event.gpsupdate.in"/>
+            <bean ref="gpsTransformation" method="process"/>
+            <to uri="activemq:queue:queue.cep.gpsupdate.in"/>
+        </route>
+
+        <route>
+            <from uri="activemq:queue:queue.cep.gpsupdate.in"/>
+            <bean ref="gpsEventCepConsumer" method="consumeEvent"/>
+        </route>
+
+        <!-- AEI Event route -->
+        <route>
+            <from uri="activemq:queue:queue.event.aeiupdate.in"/>
+            <bean ref="aeiTransformation" method="process"/>
+            <to uri="activemq:queue:queue.cep.aeiupdate.in"/>
+        </route>
+
+        <route>
+            <from uri="activemq:queue:queue.cep.aeiupdate.in"/>
+            <bean ref="aeiEventCepConsumer" method="consumeEvent"/>
+        </route>
+
+    </camelContext>
+
+    <camel:camelContext id="camel-client">
+        <camel:template id="camelTemplate"/>
+    </camel:camelContext>
+
+    <!-- TODO externalize credentials to properties -->
+    <bean id="jms" class="org.apache.activemq.camel.component.ActiveMQComponent">
+        <property name="brokerURL" value="tcp://localhost:61616"/>
+        <property name="userName" value="user"/>
+        <property name="password" value="password"/>
+    </bean>
+
+    <!-- move this to a separate config -->
+    <bean id="locomotiveInventoryCacheRepository" class="com.bnsf.drools.poc.cache.repo.SimpleLocomotiveInventoryCacheRepository"/>
+    <bean id="trainCacheRepository" class="com.bnsf.drools.poc.cache.repo.SimpleTrainCacheRepository"/>
+
+    <bean id="sessionManager" class="com.bnsf.drools.poc.drools.DroolsSessionManager">
+        <property name="sessionProducer" ref="sessionProducer"/>
+    </bean>
+
+    <bean id="sessionProducer" class="com.bnsf.drools.poc.drools.DroolsSessionProducer">
+        <property name="locomotiveInventoryCacheRepository" ref="locomotiveInventoryCacheRepository"/>
+        <property name="trainCacheRepository" ref="trainCacheRepository"/>
+        <property name="trackingAgendaEventListener" ref="trackingAgendaEventListener"/>
+        <property name="confidenceLevelChangeEventChannel" ref="confidenceLevelChangeEventChannel"/>
+    </bean>
+
+    <bean id="trackingAgendaEventListener" class="com.bnsf.drools.poc.drools.util.TrackingAgendaEventListener"/>
+
+    <bean id="confidenceLevelChangeEventChannel" class="com.bnsf.drools.poc.channel.ConfidenceLevelChangeEventChannel">
+        <property name="camelTemplate" ref="camelTemplate"/>
+    </bean>
+
+    <!-- properties -->
+    <!--
+    <bean id="yamlProperties" class="org.springframework.beans.factory.config.YamlPropertiesFactoryBean">
+        <property name="resources" value="classpath:config.yml"/>
+    </bean>
+
+    <context:property-placeholder properties-ref="yamlProperties"/>
+    -->
+</beans>

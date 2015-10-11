@@ -1,0 +1,127 @@
+//created on: Sep 10, 2015
+package com.bnsf.drools.poc.harvest
+
+import com.bnsf.drools.poc.events.internal.MissingGPSLocoEvent;
+import com.bnsf.drools.poc.events.internal.MissingAEIEvent;
+import com.bnsf.drools.poc.events.internal.ConfidenceLevelChangeEvent;
+import com.bnsf.drools.poc.model.Train;
+import com.bnsf.drools.poc.model.LocomotiveInventory;
+import com.bnsf.drools.poc.cache.repo.CacheRepository;
+
+
+global org.slf4j.Logger logger;
+global com.bnsf.drools.poc.cache.repo.CacheRepository trainCache;
+
+
+dialect "java"
+
+declare MissingAEIEvent
+    @role( event )
+end
+
+declare MissingGPSLocoEvent
+    @role( event )
+end
+
+declare TrainUpdatedWithAEIDataEvent
+    @role( event )
+end
+
+declare TrainUpdatedWithGPSLocoDataEvent
+    @role( event )
+end
+
+/**
+ * Utility function which loads and updates the confidence levels of the train in the cache
+ *
+ * @param cache
+ * @param trainId Id of train used to load from the cache
+ * @param confidenceLevelToAdd add/substract the confidence level
+ * @return ConfidenceLevelChangeEvent
+ */
+function ConfidenceLevelChangeEvent calculateConfidenceLevel(CacheRepository cache, String trainId, double confidenceLevelToAdd){
+    /** functions do not have access to global variables so all the dependencies have to be passed in eg. cache **/
+
+    /* load the train */
+    Train train = (Train)cache.get(trainId);
+    /* update the confidence level */
+    double oldConfidenceLevel = train.getConfidenceLevel();
+    train.calculatePercentage(confidenceLevelToAdd);
+    //update the data in the cache
+    cache.save(train.getTrainId(),train);
+
+    double newConfidenceLevel = train.getConfidenceLevel();
+
+    /** functions cannot insert events, so returning instead **/
+    return new ConfidenceLevelChangeEvent(oldConfidenceLevel, newConfidenceLevel, train);
+}
+
+rule "GPS Data updated on Train"
+    when
+        $a : TrainUpdatedWithGPSLocoDataEvent( )
+    then
+        logger.info("GPS Data updated for train {} ", $a.getTrainId());
+        //update the confidence levels
+        ConfidenceLevelChangeEvent confidenceLevelChangeEvent = calculateConfidenceLevel(trainCache, $a.getTrainId(), ConfidenceLevelPercentage.GPSLocoEvent.getPositivePercentageLevel());
+        insert(confidenceLevelChangeEvent);
+end
+
+rule "AEIReader Data updated on Train"
+    when
+        $a : TrainUpdatedWithAEIDataEvent( )
+    then
+        logger.info("AEI Data updated for train {} ", $a.getTrainId());
+end
+
+rule "GPSLocoEvent received a subsequent AEIEvent"
+    when
+        $a : TrainUpdatedWithAEIDataEvent( )
+        GPSLocoEvent( this before[0s,1s] $a, locomotiveId == $a.locomotiveId ) from entry-point "GPS Harvest Stream"
+    then
+        logger.info("AEIEvent received for GPSLocoEvent {} for train {} ",$a.getLocomotiveId(), $a.getTrainId());
+        //update the confidence levels
+        ConfidenceLevelChangeEvent confidenceLevelChangeEvent = calculateConfidenceLevel(trainCache, $a.getTrainId(), ConfidenceLevelPercentage.AEIEvent.getPositivePercentageLevel());
+        insert(confidenceLevelChangeEvent);
+
+end
+
+rule "GPSLocoEvent did not receive a subsequent AEIEvent"
+    when
+        $gpsLocoEvent : GPSLocoEvent( ) from entry-point "GPS Harvest Stream"
+        not AEIEvent( this after[0s,2s] $gpsLocoEvent, locomotiveId == $gpsLocoEvent.getLocomotiveId() ) from entry-point "AEI Harvest Stream"
+    then
+        logger.error("Subsequent AEIEvent event missing for {}",$gpsLocoEvent.getLocomotiveId());
+        insertLogical(new MissingAEIEvent($gpsLocoEvent));
+end
+
+rule "GPSLocoEvent did not receive a subsequent GPSLocoEvent"
+    when
+        $previousGPSLocoEvent : GPSLocoEvent( ) from entry-point "GPS Harvest Stream"
+        not GPSLocoEvent( this != $previousGPSLocoEvent, this after[0s,30m] $previousGPSLocoEvent, locomotiveId == $previousGPSLocoEvent.locomotiveId ) from entry-point "GPS Harvest Stream"
+    then
+        logger.error("Subsequent GPSLocoEvent event missing for {}",$previousGPSLocoEvent.getLocomotiveId());
+        insertLogical(new MissingGPSLocoEvent($previousGPSLocoEvent));
+end
+
+rule "Handle MissingGPSLocoEvent"
+    salience 10
+    when
+        $mg : MissingGPSLocoEvent( $previousGPSLocoEvent : gpsLocoEvent )
+        $l : LocomotiveInventory( locomotiveId == $previousGPSLocoEvent.locomotiveId )
+    then
+        //update the confidence levels
+        ConfidenceLevelChangeEvent confidenceLevelChangeEvent = calculateConfidenceLevel(trainCache, $l.getTrainId(), ConfidenceLevelPercentage.GPSLocoEvent.getNegativePercentageLevel());
+        insert(confidenceLevelChangeEvent);
+end
+
+
+rule "Handle MissingAEIEvent"
+    salience 9
+    when
+        $ma : MissingAEIEvent( $previousGPSLocoEvent : gpsLocoEvent )
+        $l : LocomotiveInventory( locomotiveId == $previousGPSLocoEvent.locomotiveId )
+    then
+        //update the confidence levels
+        ConfidenceLevelChangeEvent confidenceLevelChangeEvent = calculateConfidenceLevel(trainCache, $l.getTrainId(), ConfidenceLevelPercentage.AEIEvent.getNegativePercentageLevel());
+        insert(confidenceLevelChangeEvent);
+end

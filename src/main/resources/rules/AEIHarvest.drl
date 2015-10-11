@@ -1,0 +1,86 @@
+//created on: Sep 9, 2015
+package com.bnsf.drools.poc.harvest
+
+//list any import classes here.
+import com.bnsf.drools.poc.events.GPSLocoEvent;
+import com.bnsf.drools.poc.events.AEIEvent;
+import com.bnsf.drools.poc.model.LocomotiveInventory;
+import com.bnsf.drools.poc.model.Train;
+import com.bnsf.drools.poc.events.internal.TrainMissingInCacheEvent;
+import com.bnsf.drools.poc.events.internal.LocomotiveInventoryMissingInCacheEvent;
+import com.bnsf.drools.poc.events.internal.TrainUpdatedWithAEIDataEvent;
+
+
+//global variables
+global org.slf4j.Logger logger
+global com.bnsf.drools.poc.cache.repo.CacheRepository locomotiveInventoryCacheRepository
+global com.bnsf.drools.poc.cache.repo.CacheRepository trainCache
+
+dialect "java"
+ 
+// tells the engine that AEIEvent instance will assume the role of events and that the default retention 
+declare AEIEvent
+    @role( event )
+end
+
+rule "AEI Harvest With Missing LocomotiveInventory"
+
+    when
+       $a : AEIEvent( ) from entry-point "AEI Harvest Stream"
+       not LocomotiveInventory( locomotiveId == $a.locomotiveId )
+    then
+    	logger.info("AEI event detected reader {} locomotive {}",$a.getAEIReaderId(),$a.getLocomotiveId());
+        //load from the cache and insert into working memory
+        LocomotiveInventory locomotiveInventory = (LocomotiveInventory)locomotiveInventoryCacheRepository.get($a.getLocomotiveId());
+        if ( locomotiveInventory == null){
+        	logger.error("LocomotiveInventory not found for locomotive {}",$a.getLocomotiveId());
+        	LocomotiveInventoryMissingInCacheEvent locomotiveInventoryMissingInCacheEvent = new LocomotiveInventoryMissingInCacheEvent();
+        	locomotiveInventoryMissingInCacheEvent.setLocomotiveId($a.getLocomotiveId());
+        	//pitfall - if the above line is missing, then the below event does not fire
+        	drools.getEntryPoint("Missing Data Events Stream").insert(locomotiveInventoryMissingInCacheEvent);
+        } else {
+        	logger.info("LocomotiveInventory found for locomotive {}",$a.getLocomotiveId());
+        	insert(locomotiveInventory);
+        }
+end
+
+
+rule "AEI Harvest With Matching LocomotiveInventory"
+
+    when
+       $a : AEIEvent( ) from entry-point "AEI Harvest Stream"
+       $l : LocomotiveInventory( locomotiveId == $a.locomotiveId )
+    then
+    	
+        //get the train object from the cache and insert into working memory
+        Train train = (Train)trainCache.get($l.getTrainId());
+        if ( train == null){
+        	logger.error("Train not found for locomotive {} train {}",$a.getLocomotiveId(),$l.getTrainId());
+        	drools.getEntryPoint("Missing Data Events Stream").insert(new TrainMissingInCacheEvent($l.getTrainId()));
+        } else {
+        	logger.info("Train found for locomotive {} train {}",$a.getLocomotiveId(),$l.getTrainId());
+        	insert(train);
+        }
+        
+end
+
+rule "AEI Harvest With Matching LocomotiveInventory and Train"
+
+    when
+       $a : AEIEvent( ) from entry-point "AEI Harvest Stream"
+       $l : LocomotiveInventory( locomotiveId == $a.getLocomotiveId() )
+       $t : Train( trainId == $l.getTrainId() )
+    then
+    	logger.info("For AEIEvent Found all 3 objects updating the Train {}",$t.getTrainId());
+        //update the train object
+        Train train = (Train)trainCache.get($t.getTrainId());
+        train.setAEIReaderId($a.getAEIReaderId());
+
+        //FIXME find a better approach/place
+        trainCache.save(train.getTrainId(),train);
+
+        insertLogical(new TrainUpdatedWithAEIDataEvent($a.getAEIReaderId(), $a.getLocomotiveId(), $t.getTrainId()));
+end
+
+
+

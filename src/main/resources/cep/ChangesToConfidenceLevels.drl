@@ -1,0 +1,19 @@
+//created on: Sep 10, 2015
+package com.bnsf.drools.poc.harvest
+
+import com.bnsf.drools.poc.model.Train;
+
+global org.slf4j.Logger logger
+global com.bnsf.drools.poc.cache.repo.CacheRepository trainCache
+
+
+dialect "java"
+
+
+rule "Handle Changes to ConfidenceLevels"
+    when
+        $cl : ConfidenceLevelChangeEvent( )
+    then
+        logger.info("ConfidenceLevel for {} changed from {} to {}",$cl.getTrain().getTrainId(),$cl.getOldPercentage(), $cl.getNewPercentage());
+        channels["confidence_level_change_channel"].send( $cl );
+end

@@ -1,0 +1,40 @@
+//created on: Sep 9, 2015
+package com.bnsf.drools.poc.harvest
+
+import com.bnsf.drools.poc.events.internal.TrainMissingInCacheEvent;
+import com.bnsf.drools.poc.events.internal.LocomotiveInventoryMissingInCacheEvent;
+
+
+//global variables
+global org.slf4j.Logger logger
+
+dialect "java"
+
+
+declare LocomotiveInventoryMissingInCacheEvent
+    @role( event )
+end
+
+declare TrainMissingInCacheEvent
+    @role( event )
+end
+
+rule "Handle Missing LocomotiveInventory in the cache"
+
+    when
+        $e : LocomotiveInventoryMissingInCacheEvent( ) from entry-point "Missing Data Events Stream"
+    then
+        logger.error("Missing LocomotiveInventory {} in cache",$e.getLocomotiveId());
+		channels["missing_data_loco_inv"].send( $e );
+end
+
+
+rule "Handle missing Train in the cache"
+
+    when
+        $e : TrainMissingInCacheEvent( ) from entry-point "Missing Data Events Stream"
+    then
+        logger.error("Missing Train {} in cache",$e.getTrainId());
+		channels["missing_data_train"].send( $e );
+end
+

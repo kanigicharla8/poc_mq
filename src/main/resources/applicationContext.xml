@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:kie="http://drools.org/schema/kie-spring"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.0.xsd
+                          http://drools.org/schema/kie-spring http://drools.org/schema/kie-spring.xsd">
+
+    <![CDATA[
+    <bean id="sessionManager" class="com.bnsf.drools.poc.drools.DroolsSessionManager">
+        <property name="sessionProducer" ref="sessionProducer"/>
+    </bean>
+
+    <bean id="sessionProducer" class="com.bnsf.drools.poc.drools.DroolsSessionProducer">
+        <property name="session" ref="BNSF_KS"/>
+    </bean>
+
+
+    <!-- drools configuration -->
+
+    <kie:kmodule id="kmodule">
+        <kie:kbase name="BNSF_KB" eventProcessingMode="stream">
+            <kie:ksession name="BNSF_KS" type="stateful">
+                <!-- add listeners -->
+                <kie:agendaEventListener ref="trackingAgendaEventListener"/>
+
+                <!-- add global variables -->
+                <kie:batch>
+                    <kie:set-global identifier="locomotiveInventoryCacheRepository" ref="locomotiveInventoryCacheRepository"/>
+                    <kie:set-global identifier="trainCache" ref="trainCacheRepository"/>
+                </kie:batch>
+            </kie:ksession>
+        </kie:kbase>
+    </kie:kmodule>
+
+
+    <bean id="kiePostProcessor" class="org.kie.spring.KModuleBeanFactoryPostProcessor">
+        <constructor-arg name="configFileURL" value=""></constructor-arg>
+        <constructor-arg name="configFilePath" value="classpath:src/main/resources/rules"></constructor-arg>
+    </bean>
+
+    <bean id="trackingAgendaEventListener" class="com.bnsf.drools.poc.drools.util.TrackingAgendaEventListener"/>
+
+    <!-- cache configuration -->
+    <bean id="locomotiveInventoryCacheRepository" class="com.bnsf.drools.poc.cache.repo.SimpleLocomotiveInventoryCacheRepository"/>
+    <bean id="trainCacheRepository" class="com.bnsf.drools.poc.cache.repo.SimpleTrainCacheRepository"/>
+]]>
+
+</beans>

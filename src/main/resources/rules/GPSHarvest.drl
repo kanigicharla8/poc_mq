@@ -1,0 +1,76 @@
+//created on: Sep 9, 2015
+package com.bnsf.drools.poc.harvest
+
+import com.bnsf.drools.poc.events.GPSLocoEvent;
+import com.bnsf.drools.poc.model.LocomotiveInventory;
+import com.bnsf.drools.poc.model.Train;
+import com.bnsf.drools.poc.events.internal.TrainMissingInCacheEvent;
+import com.bnsf.drools.poc.events.internal.LocomotiveInventoryMissingInCacheEvent;
+import com.bnsf.drools.poc.events.internal.ConfidenceLevelPercentage;
+import com.bnsf.drools.poc.events.internal.ConfidenceLevelChangeEvent;
+import com.bnsf.drools.poc.events.internal.TrainUpdatedWithGPSLocoDataEvent;
+
+
+global org.slf4j.Logger logger
+global com.bnsf.drools.poc.cache.repo.CacheRepository locomotiveInventoryCacheRepository
+global com.bnsf.drools.poc.cache.repo.CacheRepository trainCache
+
+dialect "java"
+ 
+// tells the engine that GPSLocoEvent instance will assume the role of events and that the default retention 
+declare GPSLocoEvent
+    @role( event )
+end
+
+rule "GPS Harvest With Missing LocomotiveInventory"
+    when
+       $g : GPSLocoEvent( ) from entry-point "GPS Harvest Stream"
+       not LocomotiveInventory( locomotiveId == $g.locomotiveId )
+    then
+        //load from the cache and insert into working memory
+        LocomotiveInventory locomotiveInventory = (LocomotiveInventory)locomotiveInventoryCacheRepository.get($g.getLocomotiveId());
+        if ( locomotiveInventory == null){
+        	logger.error("LocomotiveInventory not found for locomotive {}",$g.getLocomotiveId());
+        	LocomotiveInventoryMissingInCacheEvent locomotiveInventoryMissingInCacheEvent = new LocomotiveInventoryMissingInCacheEvent();
+        	locomotiveInventoryMissingInCacheEvent.setLocomotiveId($g.getLocomotiveId());
+        	drools.getEntryPoint("Missing Data Events Stream").insert(locomotiveInventoryMissingInCacheEvent);
+        } else {
+        	logger.info("LocomotiveInventory found for locomotive {}",$g.getLocomotiveId());
+        	insert(locomotiveInventory);
+        }
+        
+end
+
+rule "GPS Harvest With Matching LocomotiveInventory"
+    when
+       $g : GPSLocoEvent( ) from entry-point "GPS Harvest Stream"
+       $l : LocomotiveInventory( locomotiveId == $g.locomotiveId )
+    then
+        //get the train object from the cache and insert into working memory
+        Train train = (Train)trainCache.get($l.getTrainId());
+        if ( train == null){
+        	drools.getEntryPoint("Missing Data Events Stream").insert(new TrainMissingInCacheEvent($l.getTrainId()));
+        } else {
+        	insert(train);
+        }
+        
+end
+
+rule "GPS Harvest With Matching LocomotiveInventory and Train"
+	no-loop true
+    when
+       $g : GPSLocoEvent( ) from entry-point "GPS Harvest Stream"
+       $l : LocomotiveInventory( locomotiveId == $g.locomotiveId )
+       $t : Train( trainId == $l.trainId )
+    then
+    	logger.info("Found all 3 objects updating the Train {}",$t.getTrainId());
+    	//update the train object
+        Train train = (Train)trainCache.get($t.getTrainId());
+        train.setLatitude($g.getLatitude());
+        train.setLongitude($g.getLongitude());
+
+        //FIXME find a better approach/place
+        trainCache.save(train.getTrainId(),train);
+
+        insertLogical(new TrainUpdatedWithGPSLocoDataEvent($g.getLocomotiveId(), $t.getTrainId()));
+end
